@@ -1184,6 +1184,21 @@ def index():
         active_backend=ACTIVE_EVAL_BACKEND,
     )
 
+@app.route("/health")
+def health():
+    if faiss_index is None or len(faiss_meta) == 0:
+        return jsonify({
+            "status": "degraded",
+            "reason": "FAISS index not loaded",
+        }), 503
+    return jsonify({
+        "status":        "ok",
+        "faiss_vectors": faiss_index.ntotal,
+        "metadata_docs": len(faiss_meta),
+        "eval_backend":  ACTIVE_EVAL_BACKEND,
+        "models":        list(MODEL_OPTIONS.keys()),
+    })
+
 @app.route("/ask", methods=["POST"])
 def ask():
     data      = request.get_json(force=True)

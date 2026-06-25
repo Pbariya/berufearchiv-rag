@@ -1,0 +1,46 @@
+# docker-compose.yml
+# LOCAL DEVELOPMENT — runs your RAG app in Docker on your laptop
+#
+# USAGE:
+#   cp .env.example .env           # fill in your real API keys
+#   docker compose up --build      # first run (~10-15 min)
+#   docker compose up              # every run after (~30 sec)
+#   docker compose down            # stop everything
+#   docker compose logs -f         # see live logs
+
+services:
+  rag-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: berufearchiv-rag
+
+    ports:
+      - "5000:5000"
+
+    # Reads your .env file and injects every key as environment variable
+    # This is how GROQ_API_KEY etc. reach your app's _get_secret() function
+    env_file:
+      - .env
+
+    environment:
+      - PYTHONUNBUFFERED=1
+      - USE_NGROK=false
+
+    # VOLUMES: mount local folders INTO the container
+    # Left side  = path on YOUR laptop
+    # Right side = path INSIDE the container
+    volumes:
+      - ./Faiss_Metadata:/app/Faiss_Metadata
+      - ./ckpts:/app/ckpts
+      - ./exports_v6:/app/exports_v6
+      - ./rag_evaluation_berufearchiv.sqlite:/app/rag_evaluation_berufearchiv.sqlite
+
+    restart: unless-stopped
+
+    # Memory limit — app needs ~4-6GB for ML models
+    deploy:
+      resources:
+        limits:
+          memory: 8G

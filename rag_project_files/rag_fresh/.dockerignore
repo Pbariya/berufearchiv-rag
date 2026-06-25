@@ -1,0 +1,34 @@
+# .dockerignore
+# Stops large files being sent to Docker build context (speeds up docker build)
+
+# Large ML artifacts — mounted as volumes at runtime
+Faiss_Metadata/
+Faiss/
+ckpts/
+exports_v6/
+Archivdaten_jsons/
+"Kowledge Base"/
+DATA/
+
+# Runtime data
+*.sqlite
+*.csv
+
+# Secrets
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Git
+.git/
+.github/
+
+# Tests
+tests/
+
+# Docs
+*.md

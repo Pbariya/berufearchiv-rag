@@ -1,0 +1,155 @@
+# .github/workflows/deploy.yml
+#
+# CI/CD Pipeline — Berufsarchiv RAG Application
+#
+# WHAT HAPPENS ON EVERY PUSH TO main:
+#
+#   [1] test   → run pytest (if fails → STOP, nothing deploys)
+#       ↓
+#   [2] build  → docker build + push to GCP Artifact Registry
+#       ↓
+#   [3] deploy → gcloud run deploy + health check verification
+#
+# ON PULL REQUESTS: only [1] runs — no deployment
+#
+# BEFORE THIS WORKS YOU NEED:
+#   1. Add GCP_SERVICE_ACCOUNT_KEY to GitHub Secrets
+#      (repo → Settings → Secrets and variables → Actions)
+#   2. Replace YOUR-GCP-PROJECT-ID below with your real project ID
+#   3. Add API keys to GCP Secret Manager:
+#      groq-api-key, mistral-api-key, cerebras-api-key
+
+name: CI/CD — Test, Build, Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  PROJECT_ID:   YOUR-GCP-PROJECT-ID      # ← REPLACE with your GCP project ID
+  SERVICE_NAME: berufearchiv-rag
+  REGION:       europe-west3             # Frankfurt
+  REGISTRY:     europe-west3-docker.pkg.dev
+  REPO_NAME:    rag-services
+
+jobs:
+
+  # ── JOB 1: Run Tests ────────────────────────────────────────────────────────
+  # Runs on EVERY push and PR.
+  # If any test fails → pipeline stops. Nothing gets built or deployed.
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Cache pip — makes CI ~2 min faster after first run
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+
+      # Install ONLY what tests need — not the full 6GB ML stack
+      # Tests mock faiss, sentence-transformers etc. so we don't need them
+      - name: Install test dependencies
+        run: pip install flask pytest python-dotenv groq numpy rank-bm25
+
+      # Fake API keys so _get_secret() doesn't warn during tests
+      - name: Set test environment
+        run: |
+          echo "GROQ_API_KEY=ci-test-key"     >> $GITHUB_ENV
+          echo "MISTRAL_API_KEY=ci-test-key"  >> $GITHUB_ENV
+          echo "CEREBRAS_API_KEY=ci-test-key" >> $GITHUB_ENV
+
+      - name: Run pytest
+        run: pytest tests/ -v --tb=short
+
+
+  # ── JOB 2: Build and Push Docker Image ──────────────────────────────────────
+  # Only runs if: tests passed AND this is a push to main (not a PR)
+  build-and-push:
+    name: Build and Push Image
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for GCP
+        run: gcloud auth configure-docker ${{ env.REGISTRY }}
+
+      # Tag with commit SHA (traceability) AND latest (convenience)
+      - name: Build and push image
+        run: |
+          IMAGE=${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.SERVICE_NAME }}
+          docker build -t $IMAGE:${{ github.sha }} -t $IMAGE:latest .
+          docker push $IMAGE:${{ github.sha }}
+          docker push $IMAGE:latest
+
+
+  # ── JOB 3: Deploy to Cloud Run ──────────────────────────────────────────────
+  deploy:
+    name: Deploy to Cloud Run
+    runs-on: ubuntu-latest
+    needs: build-and-push
+
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      # API keys injected from GCP Secret Manager — never in code or logs
+      - name: Deploy to Cloud Run
+        run: |
+          IMAGE=${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.SERVICE_NAME }}
+          gcloud run deploy ${{ env.SERVICE_NAME }} \
+            --image       $IMAGE:${{ github.sha }} \
+            --region      ${{ env.REGION }} \
+            --platform    managed \
+            --allow-unauthenticated \
+            --memory      8Gi \
+            --cpu         4 \
+            --timeout     300 \
+            --max-instances 3 \
+            --set-secrets GROQ_API_KEY=groq-api-key:latest \
+            --set-secrets MISTRAL_API_KEY=mistral-api-key:latest \
+            --set-secrets CEREBRAS_API_KEY=cerebras-api-key:latest
+
+      # Confirm deployment is actually alive
+      - name: Verify health check
+        run: |
+          URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} \
+            --region ${{ env.REGION }} \
+            --format "value(status.url)")
+          echo "Deployed to: $URL"
+          HTTP_CODE=$(curl --silent --output /dev/null --write-out "%{http_code}" "$URL/health")
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✅ Health check passed"
+          else
+            echo "❌ Health check FAILED (HTTP $HTTP_CODE)"
+            exit 1
+          fi
