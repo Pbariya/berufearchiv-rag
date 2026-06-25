@@ -1,0 +1,26 @@
+# Secret files — NEVER upload
+.env
+
+# Python environment — huge, not needed
+venv/
+__pycache__/
+*.pyc
+
+# Generated index files — rebuilt from code
+Faiss/
+Faiss_Metadata/
+
+# Model checkpoints — too large
+ckpts/
+
+# Proprietary and generated data
+Knowledge Base/
+Archivdaten_jsons/
+Unmatched/
+
+# Evaluation database files — too large
+*.sqlite
+
+# System files
+.DS_Store
+
