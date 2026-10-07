@@ -7,7 +7,7 @@ import os
 import json
 import pytest
 import numpy as np
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, mock_open
 
 # ── Set fake env vars FIRST ───────────────────────────────────────────────────
 os.environ["GROQ_API_KEY"]     = "ci-test-key"
@@ -44,10 +44,35 @@ _mock_meta = [
     for i in range(10)
 ]
 
+# ── Stub heavy packages that CI does not install ─────────────────────────────
+# The CI job installs only flask, pytest, numpy, rank-bm25, groq and python-dotenv.
+# patch("faiss.read_index") and the app's own `import torch` / `import faiss`
+# need importable modules, so register MagicMock stand-ins when the real
+# package is missing. Where the real packages exist (a developer machine,
+# the Docker image) nothing changes.
+for _pkg in ("faiss", "torch", "sentence_transformers", "transformers"):
+    try:
+        __import__(_pkg)
+    except ImportError:
+        _stub = MagicMock()
+        if _pkg == "torch":
+            _stub.cuda.is_available.return_value = False   # app takes the CPU path
+        sys.modules[_pkg] = _stub
+
+# The app opens Faiss_Metadata/metadata.json at import. That file is not in the
+# repository (the knowledge base is not published), so serve an empty stand-in for
+# that one path and leave every other file open untouched. json.load is patched below.
+_real_open = open
+def _open_stub(path, *args, **kwargs):
+    if str(path).endswith("metadata.json"):
+        return mock_open(read_data="[]")()
+    return _real_open(path, *args, **kwargs)
+
 # ── Patch BEFORE importing the app ───────────────────────────────────────────
 # The app loads models at module level — patches must be active during import
 with patch("faiss.read_index", return_value=_mock_index), \
      patch("json.load", return_value=_mock_meta), \
+     patch("builtins.open", side_effect=_open_stub), \
      patch("sentence_transformers.SentenceTransformer", return_value=_mock_embed), \
      patch("sentence_transformers.CrossEncoder", return_value=_mock_reranker), \
      patch("transformers.pipeline", return_value=MagicMock()), \
