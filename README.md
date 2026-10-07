@@ -3,6 +3,16 @@
 **Author:** Pravina Bariya
 **Supervisors:** Prof. Dr. Jan Jürjens & M.Sc. Thomas Reiser
 
+This repository accompanies the master's thesis *Developing a Domain-Specific AI
+Assistant for Technical Documentation Using AWS Bedrock Models*. It contains two
+retrieval-augmented generation (RAG) pipelines that share one retrieval design
+(FAISS dense search + BM25 + reciprocal rank fusion + cross-encoder re-ranking)
+and one evaluation approach (NLI-based metrics grounded in RAGAS):
+
+- **Alfabet pipeline** — enterprise product documentation, English, three AWS Bedrock models.
+- **Berufearchiv pipeline** — OCR-processed historical German occupational archives
+  (about 5,000 scanned files), six LLMs via Groq and Mistral AI.
+
 ---
 
 ## What This Project Does
@@ -63,8 +73,8 @@ Two OS-level tools must be installed first (required for Berufearchiv pipeline):
 
 ### 1. Clone this repository
 ```bash
-git clone https://gitlab.com/pravina.vejabhai.bariya/rag-pipeline.git
-cd rag-pipeline
+git clone https://github.com/Pbariya/berufearchiv-rag.git
+cd berufearchiv-rag
 ```
 
 ### 2. Create a virtual environment
@@ -112,7 +122,7 @@ Open browser: http://localhost:5000
 
 ---
 
-## Running the Berufearchiv Pipeline (Open-Source Models)
+## Running the Berufearchiv Pipeline (Groq and Mistral AI Models)
 
 **Step 1 — Extract text from scanned PDFs using OCR:**
 ```bash
@@ -131,6 +141,13 @@ python build_faiss_index_berufearchiv.py
 python rag_evaluation_berufearchiv.py
 ```
 Open browser: http://localhost:5000
+
+### Rate limits and failover
+
+The six Berufearchiv models run on free-tier APIs (Groq, Mistral AI). A circuit
+breaker fails over to Cerebras (Qwen3-32B) when a primary endpoint is
+rate-limited. The provider used for each record is logged in the `provider`
+field, and failover events are logged with a `circuit_open` flag.
 
 ---
 
@@ -158,11 +175,32 @@ User types a question
 Answer shown to user — all results saved to SQLite + CSV
 ```
 
+**Relation to RAGAS.** The four metrics follow the RAGAS metric suite. They differ
+from the reference RAGAS implementation in two ways: factual consistency is scored
+with an NLI model (MiniCheck for English, mDeBERTa-v3 for German) instead of an LLM
+judge, and one shared NLI matrix serves three of the metrics. Evaluation runs
+asynchronously in a background thread (mean 134–225 s per query), so it does not
+delay the user-facing response.
+
 ---
 
 ## Evaluation Results
 
-### Alfabet Pipeline (AWS Bedrock) — 63 questions per model
+### Evaluation overview
+
+| | Alfabet | Berufearchiv |
+|---|---|---|
+| Models | 3 (Claude 4.5 Sonnet, Amazon Nova Pro, Amazon Nova Lite via AWS Bedrock) | 6 (Llama-4 Maverick, Llama-3.3-70B, Llama-3.1-8B, Qwen3-32B via Groq; Mistral-Large, Mistral-Small via Mistral AI) |
+| Records | 189 (63 per model: 61 unique questions plus 2 regeneration records; 50 in scope, 11 out of scope) | 264 (44 questions per model) |
+| Total | **453 evaluation records across 9 models and two corpora** | |
+
+Human ratings (acceptable / not acceptable) were given by a single annotator, the
+thesis author, blind to the automated scores. Treat the approval rates as
+indicative, not definitive (see Limitations).
+
+### Alfabet Pipeline (AWS Bedrock) — 63 records per model
+
+In-scope responses only (abstentions excluded; n = 55 / 49 / 44 answered in-scope responses).
 
 | Model | Human Approval (in-scope) | Faithfulness | Context Precision |
 |---|---|---|---|
@@ -170,7 +208,9 @@ Answer shown to user — all results saved to SQLite + CSV
 | Amazon Nova Pro   | 79.6%     | 0.701 | 0.691     |
 | Amazon Nova Lite  | 77.3%     | **0.746** | 0.684 |
 
-### Berufearchiv Pipeline (Open-Source) — 44 questions per model
+### Berufearchiv Pipeline — 44 questions per model
+
+Mean over all 44 questions per model, abstentions included.
 
 | Model | Faithfulness | Context Recall | Abstention Rate |
 |---|---|---|---|
@@ -178,8 +218,36 @@ Answer shown to user — all results saved to SQLite + CSV
 | Llama-3.1-8B   | 0.703     | 0.784     | **6.8%** |
 | Mistral-Large  | 0.660     | 0.731     | 43.2%    |
 
+Across all 44 questions per model, Llama-3.1-8B had the lowest abstention rate
+(6.8%), Mistral-Large the highest (43.2%) and the highest generation latency
+(4.59 s). Context precision ranged from 0.712 to 0.896.
+
+Cost and latency (Alfabet pipeline): Amazon Nova Lite is about 50× cheaper than
+Claude 4.5 Sonnet per token at list price (Claude input $3.00 per million tokens);
+this is a price ratio per token, not a measured cost per answer. Mean total
+response time was 10.6 s for Claude 4.5 Sonnet, 4.2 s for Nova Pro and 4.4 s for
+Nova Lite (Claude's retrieval time is absorbed inside the LangChain chain and is
+not timed separately).
+
 Full evaluation results including all models and per-question metrics
 are available in the exports_v6/ folder as CSV files.
+
+## CI/CD
+
+A GitHub Actions workflow (`.github/workflows/deploy.yml`) runs the tests on every
+push and pull request. Once a GCP project, service-account key and secrets are
+configured, it builds the Docker image and deploys to Google Cloud Run
+(europe-west3). The workflow still contains the placeholder project ID
+`YOUR-GCP-PROJECT-ID`, so no deployment is configured in this repository.
+
+## Limitations
+
+- Human ratings come from one annotator (the author); inter-annotator agreement could not be computed.
+- Model-specific query rewriting means retrieval was not identical across the three Alfabet models (only about 5 of 61 questions produced identical retrieval), so Context Precision partly reflects the rewriting step.
+- Evaluation is reference-free; there is no golden dataset of verified answers. A golden dataset of frequently asked questions is scoped as future work.
+- Berufearchiv runs were spread across several sessions because of free-tier rate limits, and each evaluation was run once.
+- Llama-4 Maverick was later decommissioned on Groq (March 2026); its results reflect its operating period.
+- Of the Alfabet refusals, 37 of 41 were refusals of questions the annotator judged answerable (87.5–92.9% per model), pointing to retrieval coverage as the main cause.
 
 ---
 
