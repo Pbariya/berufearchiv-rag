@@ -235,10 +235,12 @@ are available in the exports_v6/ folder as CSV files.
 ## CI/CD
 
 A GitHub Actions workflow (`.github/workflows/deploy.yml`) runs the tests on every
-push and pull request. Once a GCP project, service-account key and secrets are
-configured, it builds the Docker image and deploys to Google Cloud Run
-(europe-west3). The workflow still contains the placeholder project ID
-`YOUR-GCP-PROJECT-ID`, so no deployment is configured in this repository.
+push and pull request. The build and deploy jobs (Docker image to Artifact Registry,
+then Google Cloud Run in europe-west3) are skipped until the repository variable
+`DEPLOY_ENABLED` is set to `true`. Before enabling it, configure a GCP project,
+replace the placeholder project ID `YOUR-GCP-PROJECT-ID` in the workflow, and add
+the service-account key and secrets described in the workflow header. No deployment
+is configured in this repository.
 
 ## Limitations
 

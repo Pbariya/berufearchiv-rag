@@ -18,6 +18,9 @@
 #   2. Replace YOUR-GCP-PROJECT-ID below with your real project ID
 #   3. Add API keys to GCP Secret Manager:
 #      groq-api-key, mistral-api-key, cerebras-api-key
+#   4. Set the repository variable DEPLOY_ENABLED to 'true'
+#      (repo → Settings → Secrets and variables → Actions → Variables).
+#      Until then the build and deploy jobs are skipped and only the tests run.
 
 name: CI/CD — Test, Build, Deploy
 
@@ -81,7 +84,9 @@ jobs:
     name: Build and Push Image
     runs-on: ubuntu-latest
     needs: test
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    # Skipped until the repository variable DEPLOY_ENABLED is set to 'true' (see header).
+    # The deploy job needs this job, so it is skipped too.
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.DEPLOY_ENABLED == 'true'
 
     steps:
       - name: Checkout code
